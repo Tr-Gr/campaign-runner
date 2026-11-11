@@ -1,0 +1,103 @@
+# Campaign Runner: one config table and one Lakeflow job for every campaign, with safe delivery to the target.
+# Deploy:   databricks bundle deploy -t dev
+# Set up:   databricks bundle run -t dev campaign_runner_setup
+# Run:      databricks bundle run -t dev campaign_runner
+bundle:
+  name: campaign-runner
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog (must already exist)
+  schema:
+    description: Schema for the config, message and log tables (created if missing)
+    default: campaigns
+  table_prefix:
+    description: Prefix for every table and view the framework creates (the dashboard expects the default)
+    default: camp_
+  warehouse_id:
+    description: SQL warehouse for the dashboard and the Genie Agent
+  fanout_concurrency:
+    description: How many campaigns run at the same time
+    default: 10
+  create_sample_data:
+    description: Create synthetic source tables and the audience_source and recipient_source views
+    default: "true"
+  seed_sample_campaigns:
+    description: Register the sample templates and campaigns
+    default: "true"
+  schedule_pause_status:
+    description: PAUSED or UNPAUSED for the daily schedule
+    default: PAUSED
+  egress_target:
+    description: postgres, oracle (template) or none
+    default: none
+  target_table:
+    description: Table name in the target database (a staging table named <target_table>_stage is used)
+    default: message_approved
+  pg_host:
+    description: Postgres host (egress_target = postgres)
+    default: ""
+  pg_database:
+    description: Postgres database (egress_target = postgres)
+    default: ""
+  lakebase_endpoint:
+    description: Lakebase endpoint path for OAuth tokens (leave empty to use pg_secret_scope instead)
+    default: ""
+  pg_secret_scope:
+    description: Secret scope with keys user and password for a non-Lakebase Postgres
+    default: ""
+  oracle_connection:
+    description: Unity Catalog JDBC connection name for Oracle (egress_target = oracle)
+    default: ""
+  oracle_secret_scope:
+    description: Secret scope with keys user, password and dsn for the Oracle MERGE step
+    default: ""
+  retention_days:
+    description: Delete message_approved rows this many days after they were delivered (never before)
+    default: 7
+  history_retention_days:
+    description: Keep send_history (used by lookbacks) this many days
+    default: 400
+  service_principal_application_id:
+    description: Application ID of the service principal that runs staging and prod
+    default: ""
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://<your-dev-workspace>.azuredatabricks.net
+    variables:
+      catalog: <dev_catalog>
+      warehouse_id: <dev_warehouse_id>
+
+  staging:
+    mode: production
+    workspace:
+      host: https://<your-nonprod-workspace>.azuredatabricks.net
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.service_principal_application_id}
+    variables:
+      catalog: <staging_catalog>
+      warehouse_id: <staging_warehouse_id>
+      create_sample_data: "false"
+      seed_sample_campaigns: "false"
+
+  prod:
+    mode: production
+    workspace:
+      host: https://<your-prod-workspace>.azuredatabricks.net
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.service_principal_application_id}
+    variables:
+      catalog: <prod_catalog>
+      warehouse_id: <prod_warehouse_id>
+      create_sample_data: "false"
+      seed_sample_campaigns: "false"
+      schedule_pause_status: UNPAUSED

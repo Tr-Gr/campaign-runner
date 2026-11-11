@@ -1,0 +1,81 @@
+"""Generate resources/marketing_self_service.yml: the Campaign Operations dashboard and Genie Agent.
+The Genie Agent reads campaign-level views only (no person rows). Table names use bundle variables, so the
+same definition deploys to dev, staging and prod. Rerun after editing questions or instructions."""
+import json
+import os
+import uuid
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+NS = uuid.UUID("6f0c2a52-6a84-4c2e-9b6f-1c2b3a4d5e6f")
+hid = lambda s: uuid.uuid5(NS, s).hex
+FQ = "${var.catalog}.${var.schema}.${var.table_prefix}"
+
+TABLES = ["calendar", "campaign_config", "message_summary", "run_exceptions", "run_history", "templates"]
+QUESTIONS = [
+    "What's going out tomorrow? Give me the number of sends and pieces by channel.",
+    "Which regulatory notices are scheduled next week?",
+    "Which campaigns failed, are late, or have undelivered messages?",
+    "Which campaigns are waiting for approval?",
+    "How many messages were delivered yesterday, by campaign?",
+    "Which template version did the overdue checkup letter use on the last run?",
+    "Which campaigns does Preventive Care own?",
+    "Show me the paused or inactive campaigns.",
+]
+INSTRUCTIONS = """Audience: marketing, member communications and campaign operations. They ask what sends when, how many pieces, whether runs succeeded and whether messages were delivered. They are not SQL authors; never ask for table or column names.
+
+Scope: scheduled campaigns, run history and delivery status. There are no person-level rows here; never return person ids, names, addresses or message contents. If asked for a person, say this agent only shows campaign-level counts and schedules.
+
+Time: send times are Central Time. "Today" is to_date(from_utc_timestamp(current_timestamp(), 'America/Chicago')); "tomorrow" is that plus 1 day; "next week" is the Monday to Sunday after this week. State the date range used in one short line.
+
+Vocabulary:
+- Refer to campaigns by campaign_name.
+- "Pieces" for future sends means max_pieces in calendar (the per-run cap); for past runs it means pieces in message_summary or messages_final in run_history.
+- "Delivered" means egress_status = 'EGRESSED' in message_summary; "pending" means 'PENDING'.
+- exception_state in run_exceptions: FAILED (a run failed), NOT_DELIVERED (messages still pending after the send window), LATE (send date passed with no run), AWAITING_APPROVAL (regulatory campaign not yet approved), PENDING (due today, not run yet), UPCOMING, OK.
+- Priority order: regulatory, then operational, then marketing. Always mention FAILED, NOT_DELIVERED or AWAITING_APPROVAL regulatory notices first.
+
+Style: lead with the count or the answer, then a short list (top 10 and the total for long lists). Do not invent sends that are not in the tables."""
+EXAMPLES = [
+    ("What's going out tomorrow? Give me the number of sends and pieces by channel.",
+     f"SELECT channel, count(*) AS sends, sum(max_pieces) AS max_pieces\nFROM {FQ}calendar\n"
+     "WHERE send_date = date_add(to_date(from_utc_timestamp(current_timestamp(), 'America/Chicago')), 1)\n"
+     "GROUP BY channel ORDER BY max_pieces DESC"),
+    ("Which campaigns failed, are late, or have undelivered messages?",
+     f"SELECT send_date, campaign_name, priority_class, exception_state, pending_pieces, error_message\n"
+     f"FROM {FQ}run_exceptions\nWHERE exception_state IN ('FAILED', 'NOT_DELIVERED', 'LATE', 'AWAITING_APPROVAL')\n"
+     "ORDER BY CASE priority_class WHEN 'regulatory' THEN 1 WHEN 'operational' THEN 2 ELSE 3 END, send_date"),
+]
+
+space = {
+    "version": 2,
+    "config": {"sample_questions": sorted([{"id": hid("q" + q), "question": [q]} for q in QUESTIONS],
+                                          key=lambda x: x["id"])},
+    "data_sources": {"tables": [{"identifier": FQ + t} for t in sorted(TABLES)]},
+    "instructions": {
+        "text_instructions": [{"id": hid("instructions"), "content": [INSTRUCTIONS]}],
+        "example_question_sqls": sorted([{"id": hid("e" + q), "question": [q], "sql": [s]} for q, s in EXAMPLES],
+                                        key=lambda x: x["id"]),
+    },
+}
+
+resource = {"resources": {
+    "dashboards": {"campaign_operations_dashboard": {
+        "display_name": "Campaign Operations",
+        "file_path": "../src/dashboards/campaign_operations.lvdash.json",
+        "warehouse_id": "${var.warehouse_id}",
+        "dataset_catalog": "${var.catalog}",
+        "dataset_schema": "${var.schema}"}},
+    "genie_spaces": {"campaign_operations_agent": {
+        "title": "Campaign Operations",
+        "description": "Marketing self-service: what sends when, how many pieces, run status and delivery. "
+                       "Campaign-level only, no person rows.",
+        "warehouse_id": "${var.warehouse_id}",
+        "serialized_space": json.dumps(space)}},
+}}
+
+out = os.path.join(HERE, "..", "resources", "marketing_self_service.yml")
+with open(out, "w") as f:
+    f.write("# Generated by scripts/build_genie_resource.py. Edit the script, not this file.\n")
+    import yaml  # pip install pyyaml
+    yaml.safe_dump(resource, f, sort_keys=False, width=200)
+print("wrote", os.path.normpath(out))

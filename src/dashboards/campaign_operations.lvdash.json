@@ -1,0 +1,848 @@
+{
+ "datasets": [
+  {
+   "name": "ds_kpi",
+   "displayName": "KPIs",
+   "queryLines": [
+    "SELECT\n",
+    "  (SELECT COUNT(*) FROM camp_calendar WHERE send_date BETWEEN date_trunc('week', current_date()) AND date_add(date_trunc('week', current_date()), 6)) AS sends_this_week,\n",
+    "  (SELECT COALESCE(SUM(max_pieces), 0) FROM camp_calendar WHERE send_date BETWEEN date_trunc('week', current_date()) AND date_add(date_trunc('week', current_date()), 6)) AS pieces_this_week,\n",
+    "  (SELECT COUNT(*) FROM camp_calendar WHERE priority_class = 'regulatory' AND send_date >= current_date() AND send_date < date_add(current_date(), 14)) AS regulatory_next_14d,\n",
+    "  (SELECT COUNT(*) FROM camp_run_exceptions WHERE exception_state = 'FAILED') AS failed_sends,\n",
+    "  (SELECT COUNT(*) FROM camp_run_exceptions WHERE exception_state IN ('LATE', 'NOT_DELIVERED')) AS late_sends"
+   ]
+  },
+  {
+   "name": "ds_week",
+   "displayName": "This week's sends",
+   "queryLines": [
+    "SELECT send_date, send_time_ct, campaign_name, priority_class, channel, owner_team, max_pieces, approved\n",
+    "FROM camp_calendar\n",
+    "WHERE send_date BETWEEN date_trunc('week', current_date()) AND date_add(date_trunc('week', current_date()), 6)\n",
+    "ORDER BY send_date, send_time_ct"
+   ]
+  },
+  {
+   "name": "ds_daily",
+   "displayName": "Sends by day and priority (next 30 days)",
+   "queryLines": [
+    "SELECT send_date, priority_class, SUM(max_pieces) AS pieces\n",
+    "FROM camp_calendar WHERE send_date >= current_date() AND send_date < date_add(current_date(), 30)\n",
+    "GROUP BY send_date, priority_class ORDER BY send_date"
+   ]
+  },
+  {
+   "name": "ds_channel",
+   "displayName": "Volume by channel (next 30 days)",
+   "queryLines": [
+    "SELECT channel, SUM(max_pieces) AS pieces, COUNT(*) AS sends\n",
+    "FROM camp_calendar WHERE send_date >= current_date() AND send_date < date_add(current_date(), 30)\n",
+    "GROUP BY channel ORDER BY pieces DESC"
+   ]
+  },
+  {
+   "name": "ds_type",
+   "displayName": "Delivery status by campaign (last 14 days)",
+   "queryLines": [
+    "SELECT campaign_name, egress_status, SUM(pieces) AS pieces\n",
+    "FROM camp_message_summary WHERE run_date >= date_sub(current_date(), 14)\n",
+    "GROUP BY campaign_name, egress_status ORDER BY pieces DESC"
+   ]
+  },
+  {
+   "name": "ds_run",
+   "displayName": "Run status by day",
+   "queryLines": [
+    "SELECT run_date, campaign_status, COUNT(*) AS campaigns, SUM(messages_final) AS pieces\n",
+    "FROM camp_run_history GROUP BY run_date, campaign_status ORDER BY run_date, campaign_status"
+   ]
+  },
+  {
+   "name": "ds_exceptions",
+   "displayName": "Failed, late, or pending sends",
+   "queryLines": [
+    "SELECT send_date, send_time_ct, campaign_name, priority_class, exception_state, pending_pieces, error_message\n",
+    "FROM camp_run_exceptions\n",
+    "WHERE exception_state IN ('FAILED', 'NOT_DELIVERED', 'LATE', 'AWAITING_APPROVAL', 'PENDING')\n",
+    "ORDER BY CASE exception_state WHEN 'FAILED' THEN 1 WHEN 'NOT_DELIVERED' THEN 2 WHEN 'LATE' THEN 3 ELSE 4 END, send_date, send_time_ct"
+   ]
+  }
+ ],
+ "pages": [
+  {
+   "name": "campaign_ops",
+   "displayName": "Campaign Operations",
+   "pageType": "PAGE_TYPE_CANVAS",
+   "layoutVersion": "GRID_V1",
+   "layout": [
+    {
+     "widget": {
+      "name": "h_title",
+      "multilineTextboxSpec": {
+       "lines": [
+        "## Campaign Operations",
+        "What goes out, when, how many pieces, and whether it ran. Campaign-level only: no patient rows."
+       ]
+      }
+     },
+     "position": {
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 2
+     }
+    },
+    {
+     "widget": {
+      "name": "k_sends_week",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_kpi",
+         "fields": [
+          {
+           "name": "sends_this_week",
+           "expression": "SUM(`sends_this_week`)"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 2,
+       "widgetType": "counter",
+       "encodings": {
+        "value": {
+         "fieldName": "sends_this_week",
+         "displayName": "Sends this week",
+         "format": {
+          "type": "number-plain",
+          "decimalPlaces": {
+           "type": "exact",
+           "places": 0
+          }
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Sends this week"
+       }
+      }
+     },
+     "position": {
+      "x": 0,
+      "y": 2,
+      "width": 4,
+      "height": 3
+     }
+    },
+    {
+     "widget": {
+      "name": "k_pieces_week",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_kpi",
+         "fields": [
+          {
+           "name": "pieces_this_week",
+           "expression": "SUM(`pieces_this_week`)"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 2,
+       "widgetType": "counter",
+       "encodings": {
+        "value": {
+         "fieldName": "pieces_this_week",
+         "displayName": "Max pieces this week",
+         "format": {
+          "type": "number-plain",
+          "decimalPlaces": {
+           "type": "exact",
+           "places": 0
+          }
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Max pieces this week"
+       }
+      }
+     },
+     "position": {
+      "x": 4,
+      "y": 2,
+      "width": 4,
+      "height": 3
+     }
+    },
+    {
+     "widget": {
+      "name": "k_reg_14d",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_kpi",
+         "fields": [
+          {
+           "name": "regulatory_next_14d",
+           "expression": "SUM(`regulatory_next_14d`)"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 2,
+       "widgetType": "counter",
+       "encodings": {
+        "value": {
+         "fieldName": "regulatory_next_14d",
+         "displayName": "Regulatory notices, next 14 days",
+         "format": {
+          "type": "number-plain",
+          "decimalPlaces": {
+           "type": "exact",
+           "places": 0
+          }
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Regulatory notices, next 14 days"
+       }
+      }
+     },
+     "position": {
+      "x": 8,
+      "y": 2,
+      "width": 4,
+      "height": 3
+     }
+    },
+    {
+     "widget": {
+      "name": "k_failed",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_kpi",
+         "fields": [
+          {
+           "name": "failed_sends",
+           "expression": "SUM(`failed_sends`)"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 2,
+       "widgetType": "counter",
+       "encodings": {
+        "value": {
+         "fieldName": "failed_sends",
+         "displayName": "Failed sends",
+         "format": {
+          "type": "number-plain",
+          "decimalPlaces": {
+           "type": "exact",
+           "places": 0
+          }
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Failed sends"
+       }
+      }
+     },
+     "position": {
+      "x": 0,
+      "y": 5,
+      "width": 4,
+      "height": 3
+     }
+    },
+    {
+     "widget": {
+      "name": "k_late",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_kpi",
+         "fields": [
+          {
+           "name": "late_sends",
+           "expression": "SUM(`late_sends`)"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 2,
+       "widgetType": "counter",
+       "encodings": {
+        "value": {
+         "fieldName": "late_sends",
+         "displayName": "Late or undelivered",
+         "format": {
+          "type": "number-plain",
+          "decimalPlaces": {
+           "type": "exact",
+           "places": 0
+          }
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Late or undelivered"
+       }
+      }
+     },
+     "position": {
+      "x": 4,
+      "y": 5,
+      "width": 4,
+      "height": 3
+     }
+    },
+    {
+     "widget": {
+      "name": "k_note",
+      "multilineTextboxSpec": {
+       "lines": [
+        "FAILED: a run failed. LATE: the send date passed with no run. NOT_DELIVERED: messages still pending after their send window."
+       ]
+      }
+     },
+     "position": {
+      "x": 8,
+      "y": 5,
+      "width": 4,
+      "height": 3
+     }
+    },
+    {
+     "widget": {
+      "name": "t_week",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_week",
+         "fields": [
+          {
+           "name": "send_date",
+           "expression": "`send_date`"
+          },
+          {
+           "name": "send_time_ct",
+           "expression": "`send_time_ct`"
+          },
+          {
+           "name": "campaign_name",
+           "expression": "`campaign_name`"
+          },
+          {
+           "name": "priority_class",
+           "expression": "`priority_class`"
+          },
+          {
+           "name": "channel",
+           "expression": "`channel`"
+          },
+          {
+           "name": "owner_team",
+           "expression": "`owner_team`"
+          },
+          {
+           "name": "max_pieces",
+           "expression": "`max_pieces`"
+          },
+          {
+           "name": "approved",
+           "expression": "`approved`"
+          }
+         ],
+         "disaggregated": true
+        }
+       }
+      ],
+      "spec": {
+       "version": 2,
+       "widgetType": "table",
+       "frame": {
+        "showTitle": true,
+        "title": "This week's sends (Monday to Sunday)"
+       },
+       "encodings": {
+        "columns": [
+         {
+          "fieldName": "send_date",
+          "displayName": "Date"
+         },
+         {
+          "fieldName": "send_time_ct",
+          "displayName": "Time (CT)"
+         },
+         {
+          "fieldName": "campaign_name",
+          "displayName": "Campaign"
+         },
+         {
+          "fieldName": "priority_class",
+          "displayName": "Priority"
+         },
+         {
+          "fieldName": "channel",
+          "displayName": "Channel"
+         },
+         {
+          "fieldName": "owner_team",
+          "displayName": "Owner"
+         },
+         {
+          "fieldName": "max_pieces",
+          "displayName": "Max pieces"
+         },
+         {
+          "fieldName": "approved",
+          "displayName": "Approved"
+         }
+        ]
+       }
+      }
+     },
+     "position": {
+      "x": 0,
+      "y": 8,
+      "width": 12,
+      "height": 8
+     }
+    },
+    {
+     "widget": {
+      "name": "b_daily",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_daily",
+         "fields": [
+          {
+           "name": "send_date",
+           "expression": "`send_date`"
+          },
+          {
+           "name": "sum(pieces)",
+           "expression": "SUM(`pieces`)"
+          },
+          {
+           "name": "priority_class",
+           "expression": "`priority_class`"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 3,
+       "widgetType": "bar",
+       "encodings": {
+        "x": {
+         "fieldName": "send_date",
+         "scale": {
+          "type": "categorical"
+         },
+         "axis": {
+          "title": "Send date"
+         }
+        },
+        "y": {
+         "fieldName": "sum(pieces)",
+         "scale": {
+          "type": "quantitative"
+         },
+         "axis": {
+          "title": "Pieces"
+         }
+        },
+        "color": {
+         "fieldName": "priority_class",
+         "scale": {
+          "type": "categorical"
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Max pieces by day and priority (next 30 days)"
+       },
+       "mark": {
+        "colors": [
+         "#FF3621",
+         "#00A972",
+         "#FFAB00",
+         "#8BCAE7",
+         "#AB4057",
+         "#99DDB4",
+         "#919191"
+        ]
+       }
+      }
+     },
+     "position": {
+      "x": 0,
+      "y": 16,
+      "width": 12,
+      "height": 6
+     }
+    },
+    {
+     "widget": {
+      "name": "b_channel",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_channel",
+         "fields": [
+          {
+           "name": "channel",
+           "expression": "`channel`"
+          },
+          {
+           "name": "sum(pieces)",
+           "expression": "SUM(`pieces`)"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 3,
+       "widgetType": "bar",
+       "encodings": {
+        "x": {
+         "fieldName": "channel",
+         "scale": {
+          "type": "categorical"
+         },
+         "axis": {
+          "title": "Channel"
+         }
+        },
+        "y": {
+         "fieldName": "sum(pieces)",
+         "scale": {
+          "type": "quantitative"
+         },
+         "axis": {
+          "title": "Pieces"
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Max pieces by channel (next 30 days)"
+       },
+       "mark": {
+        "colors": [
+         "#FF3621",
+         "#00A972",
+         "#FFAB00",
+         "#8BCAE7",
+         "#AB4057",
+         "#99DDB4",
+         "#919191"
+        ]
+       }
+      }
+     },
+     "position": {
+      "x": 0,
+      "y": 22,
+      "width": 6,
+      "height": 6
+     }
+    },
+    {
+     "widget": {
+      "name": "b_type",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_type",
+         "fields": [
+          {
+           "name": "campaign_name",
+           "expression": "`campaign_name`"
+          },
+          {
+           "name": "sum(pieces)",
+           "expression": "SUM(`pieces`)"
+          },
+          {
+           "name": "egress_status",
+           "expression": "`egress_status`"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 3,
+       "widgetType": "bar",
+       "encodings": {
+        "x": {
+         "fieldName": "campaign_name",
+         "scale": {
+          "type": "categorical"
+         },
+         "axis": {
+          "title": "Campaign"
+         }
+        },
+        "y": {
+         "fieldName": "sum(pieces)",
+         "scale": {
+          "type": "quantitative"
+         },
+         "axis": {
+          "title": "Pieces"
+         }
+        },
+        "color": {
+         "fieldName": "egress_status",
+         "scale": {
+          "type": "categorical"
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Delivery status by campaign (last 14 days)"
+       },
+       "mark": {
+        "colors": [
+         "#FF3621",
+         "#00A972",
+         "#FFAB00",
+         "#8BCAE7",
+         "#AB4057",
+         "#99DDB4",
+         "#919191"
+        ]
+       }
+      }
+     },
+     "position": {
+      "x": 6,
+      "y": 22,
+      "width": 6,
+      "height": 6
+     }
+    },
+    {
+     "widget": {
+      "name": "b_run",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_run",
+         "fields": [
+          {
+           "name": "run_date",
+           "expression": "`run_date`"
+          },
+          {
+           "name": "sum(campaigns)",
+           "expression": "SUM(`campaigns`)"
+          },
+          {
+           "name": "campaign_status",
+           "expression": "`campaign_status`"
+          }
+         ],
+         "disaggregated": false
+        }
+       }
+      ],
+      "spec": {
+       "version": 3,
+       "widgetType": "bar",
+       "encodings": {
+        "x": {
+         "fieldName": "run_date",
+         "scale": {
+          "type": "categorical"
+         },
+         "axis": {
+          "title": "Run date"
+         }
+        },
+        "y": {
+         "fieldName": "sum(campaigns)",
+         "scale": {
+          "type": "quantitative"
+         },
+         "axis": {
+          "title": "Campaigns"
+         }
+        },
+        "color": {
+         "fieldName": "campaign_status",
+         "scale": {
+          "type": "categorical"
+         }
+        }
+       },
+       "frame": {
+        "showTitle": true,
+        "title": "Campaign runs by day and status"
+       },
+       "mark": {
+        "colors": [
+         "#FF3621",
+         "#00A972",
+         "#FFAB00",
+         "#8BCAE7",
+         "#AB4057",
+         "#99DDB4",
+         "#919191"
+        ]
+       }
+      }
+     },
+     "position": {
+      "x": 0,
+      "y": 28,
+      "width": 6,
+      "height": 6
+     }
+    },
+    {
+     "widget": {
+      "name": "t_exceptions",
+      "queries": [
+       {
+        "name": "main_query",
+        "query": {
+         "datasetName": "ds_exceptions",
+         "fields": [
+          {
+           "name": "send_date",
+           "expression": "`send_date`"
+          },
+          {
+           "name": "send_time_ct",
+           "expression": "`send_time_ct`"
+          },
+          {
+           "name": "campaign_name",
+           "expression": "`campaign_name`"
+          },
+          {
+           "name": "priority_class",
+           "expression": "`priority_class`"
+          },
+          {
+           "name": "exception_state",
+           "expression": "`exception_state`"
+          },
+          {
+           "name": "pending_pieces",
+           "expression": "`pending_pieces`"
+          },
+          {
+           "name": "error_message",
+           "expression": "`error_message`"
+          }
+         ],
+         "disaggregated": true
+        }
+       }
+      ],
+      "spec": {
+       "version": 2,
+       "widgetType": "table",
+       "frame": {
+        "showTitle": true,
+        "title": "Failed, late, or pending sends"
+       },
+       "encodings": {
+        "columns": [
+         {
+          "fieldName": "send_date",
+          "displayName": "Date"
+         },
+         {
+          "fieldName": "send_time_ct",
+          "displayName": "Time (CT)"
+         },
+         {
+          "fieldName": "campaign_name",
+          "displayName": "Campaign"
+         },
+         {
+          "fieldName": "priority_class",
+          "displayName": "Priority"
+         },
+         {
+          "fieldName": "exception_state",
+          "displayName": "State"
+         },
+         {
+          "fieldName": "pending_pieces",
+          "displayName": "Undelivered"
+         },
+         {
+          "fieldName": "error_message",
+          "displayName": "Error"
+         }
+        ]
+       }
+      }
+     },
+     "position": {
+      "x": 6,
+      "y": 28,
+      "width": 6,
+      "height": 6
+     }
+    }
+   ]
+  }
+ ],
+ "uiSettings": {
+  "theme": {
+   "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+  }
+ }
+}

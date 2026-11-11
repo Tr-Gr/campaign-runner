@@ -1,0 +1,95 @@
+resources:
+  jobs:
+    # One-time (and safe to re-run) setup: optional sample sources, tables, views and sample campaigns.
+    campaign_runner_setup:
+      name: Campaign Runner - setup
+      tags: {app: campaign-runner}
+      parameters:
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: table_prefix, default: "${var.table_prefix}"}
+      environments:
+        - environment_key: cr
+          spec: {client: "2"}
+      tasks:
+        - task_key: sample_data
+          environment_key: cr
+          notebook_task:
+            notebook_path: ../src/00_sample_data.py
+            base_parameters: {create_sample_data: "${var.create_sample_data}"}
+        - task_key: setup
+          depends_on: [{task_key: sample_data}]
+          environment_key: cr
+          notebook_task:
+            notebook_path: ../src/00_setup.py
+            base_parameters: {seed_sample_campaigns: "${var.seed_sample_campaigns}"}
+
+    # Daily: plan -> one run per due campaign (parallel) -> egress -> maintenance -> summary
+    campaign_runner:
+      name: Campaign Runner
+      tags: {app: campaign-runner}
+      max_concurrent_runs: 1
+      performance_target: PERFORMANCE_OPTIMIZED
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: America/Chicago
+        pause_status: ${var.schedule_pause_status}
+      parameters:
+        - {name: catalog, default: "${var.catalog}"}
+        - {name: schema, default: "${var.schema}"}
+        - {name: table_prefix, default: "${var.table_prefix}"}
+        - {name: run_date, default: ""}
+      environments:
+        - environment_key: cr
+          spec:
+            client: "2"
+            dependencies: ["croniter", "psycopg[binary]"]
+      tasks:
+        - task_key: plan_today
+          environment_key: cr
+          notebook_task: {notebook_path: ../src/plan_today.py}
+        - task_key: run_campaigns
+          depends_on: [{task_key: plan_today}]
+          for_each_task:
+            inputs: "{{tasks.plan_today.values.due_campaigns}}"
+            concurrency: ${var.fanout_concurrency}
+            task:
+              task_key: run_campaign
+              environment_key: cr
+              notebook_task:
+                notebook_path: ../src/run_campaign.py
+                base_parameters:
+                  campaign_id: "{{input}}"
+                  run_date: "{{tasks.plan_today.values.run_date}}"
+                  run_id: "{{job.run_id}}"
+        - task_key: egress
+          depends_on: [{task_key: run_campaigns}]
+          environment_key: cr
+          notebook_task:
+            notebook_path: ../src/egress.py
+            base_parameters:
+              run_id: "{{job.run_id}}"
+              egress_target: "${var.egress_target}"
+              target_table: "${var.target_table}"
+              pg_host: "${var.pg_host}"
+              pg_database: "${var.pg_database}"
+              lakebase_endpoint: "${var.lakebase_endpoint}"
+              pg_secret_scope: "${var.pg_secret_scope}"
+              oracle_connection: "${var.oracle_connection}"
+              oracle_secret_scope: "${var.oracle_secret_scope}"
+        - task_key: maintenance
+          depends_on: [{task_key: egress}]
+          environment_key: cr
+          notebook_task:
+            notebook_path: ../src/maintenance.py
+            base_parameters:
+              retention_days: "${var.retention_days}"
+              history_retention_days: "${var.history_retention_days}"
+        - task_key: summary
+          depends_on: [{task_key: maintenance}]
+          environment_key: cr
+          notebook_task:
+            notebook_path: ../src/run_summary.py
+            base_parameters:
+              run_date: "{{tasks.plan_today.values.run_date}}"
+              run_id: "{{job.run_id}}"
